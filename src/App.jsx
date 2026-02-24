@@ -3,7 +3,7 @@ import { computeGridLayout } from "./layout/gridLayout";
 import { SceneManager } from "./gl/sceneManager";
 import { TextureStreamManager } from "./gl/textureStreamManager";
 import { computeDefaultMemoryPolicy } from "./gl/memoryManager";
-import { KeyboardController } from "./input/keyboardController";
+import { GestureController } from "./input/gestureController";
 import { PdfDocumentController } from "./pdf/pdfController";
 
 const INITIAL_CAMERA = {
@@ -21,7 +21,7 @@ export default function App() {
   const canvasRef = useRef(null);
   const sceneRef = useRef(null);
   const pdfControllerRef = useRef(null);
-  const keyboardRef = useRef(null);
+  const gestureRef = useRef(null);
   const textureStreamRef = useRef(null);
 
   const [status, setStatus] = useState("Upload a PDF to start.");
@@ -53,9 +53,14 @@ export default function App() {
     sceneRef.current = sceneManager;
     pdfControllerRef.current = new PdfDocumentController();
 
-    const keyboardController = new KeyboardController(cameraStateRef.current, requestRenderLoop);
-    keyboardController.attach();
-    keyboardRef.current = keyboardController;
+    const gestureController = new GestureController({
+      canvas,
+      sceneManager,
+      cameraState: cameraStateRef.current,
+      onChange: requestRenderLoop
+    });
+    gestureController.attach();
+    gestureRef.current = gestureController;
 
     const onResize = () => {
       sceneManager.onResize();
@@ -71,7 +76,7 @@ export default function App() {
       rafRef.current = 0;
       lastFrameTimeRef.current = 0;
       textureStreamRef.current?.dispose();
-      keyboardController.detach();
+      gestureController.detach();
       pdfControllerRef.current?.dispose();
       sceneManager.dispose();
     };
@@ -94,7 +99,7 @@ export default function App() {
     const delta = Math.min(0.05, (now - last) / 1000);
     lastFrameTimeRef.current = now;
 
-    const keyboardActive = keyboardRef.current?.step(delta) || false;
+    const gestureActive = gestureRef.current?.step(delta) || false;
     const cameraState = cameraStateRef.current;
     sceneRef.current.applyCameraState(cameraState);
 
@@ -108,7 +113,7 @@ export default function App() {
     sceneRef.current.render();
 
     const hasPending = textureStreamRef.current?.hasPendingWork() || false;
-    const shouldContinue = keyboardActive || hasPending || renderRequestedRef.current;
+    const shouldContinue = hasPending || renderRequestedRef.current || gestureActive;
     renderRequestedRef.current = false;
 
     if (shouldContinue) {
@@ -157,6 +162,7 @@ export default function App() {
 
       const maxTextureSize = sceneManager.getMaxTextureSize();
       const textureMaxDimension = Math.max(256, Math.min(2048, maxTextureSize));
+      const previewMaxDimension = Math.max(48, Math.min(128, Math.floor(textureMaxDimension / 16)));
 
       textureStreamRef.current = new TextureStreamManager({
         pdfController,
@@ -164,6 +170,7 @@ export default function App() {
         layout,
         memoryPolicy: computeDefaultMemoryPolicy(),
         textureMaxDimension,
+        previewMaxDimension,
         onDownscale: () => setDownscaleNotice(true),
         onError: (err) => setError(`Texture load error: ${String(err?.message || err)}`)
       });
@@ -208,9 +215,10 @@ export default function App() {
 
         <div className="help">
           <p>Controls</p>
-          <p>`+` / `-`: zoom in/out</p>
-          <p>Arrow keys: pan</p>
-          <p>Space: reset camera</p>
+          <p>Trackpad pinch or Ctrl+wheel: zoom</p>
+          <p>Two-finger drag/scroll: pan</p>
+          <p>Click and drag: pan</p>
+          <p>Double-click: reset camera</p>
         </div>
       </aside>
 

@@ -9,6 +9,7 @@ export class TextureStreamManager {
     layout,
     memoryPolicy,
     textureMaxDimension,
+    previewMaxDimension = 96,
     onDownscale,
     onError
   }) {
@@ -17,14 +18,21 @@ export class TextureStreamManager {
     this.layout = layout;
     this.pageLookup = Object.fromEntries(layout.pages.map((p) => [p.pageIndex, p]));
     this.textureMaxDimension = textureMaxDimension;
+    this.previewMaxDimension = previewMaxDimension;
     this.onDownscale = onDownscale;
     this.onError = onError;
 
     this.memoryManager = new MemoryManager(memoryPolicy);
     this.entries = new Map();
+
     this.loadQueue = [];
     this.activeLoads = 0;
     this.maxConcurrentLoads = 2;
+
+    this.previewQueue = [];
+    this.activePreviewLoads = 0;
+    this.maxConcurrentPreviewLoads = 1;
+
     this.preloadRing = 1;
     this.cancelled = false;
 
@@ -32,17 +40,27 @@ export class TextureStreamManager {
       this.entries.set(page.pageIndex, {
         pageIndex: page.pageIndex,
         texture: null,
+        previewTexture: null,
+        previewState: "unloaded",
         state: "unloaded",
         pixelWidth: 0,
         pixelHeight: 0,
         bytesEstimate: 0,
         lastUsedTs: 0
       });
+      this.previewQueue.push(page.pageIndex);
     }
+
+    this.pumpPreviewQueue();
   }
 
   hasPendingWork() {
-    return this.activeLoads > 0 || this.loadQueue.length > 0;
+    return (
+      this.activeLoads > 0 ||
+      this.loadQueue.length > 0 ||
+      this.activePreviewLoads > 0 ||
+      this.previewQueue.length > 0
+    );
   }
 
   updateVisibleSet(visibleSet, center) {
@@ -84,6 +102,57 @@ export class TextureStreamManager {
     }
   }
 
+  pumpPreviewQueue() {
+    while (this.activePreviewLoads < this.maxConcurrentPreviewLoads && this.previewQueue.length > 0) {
+      const pageIndex = this.previewQueue.shift();
+      const entry = this.entries.get(pageIndex);
+      if (!entry || entry.previewState === "loading" || entry.previewState === "ready") {
+        continue;
+      }
+      this.loadPreviewTexture(pageIndex);
+    }
+  }
+
+  async loadPreviewTexture(pageIndex) {
+    const entry = this.entries.get(pageIndex);
+    if (!entry) {
+      return;
+    }
+
+    entry.previewState = "loading";
+    this.activePreviewLoads += 1;
+
+    try {
+      const renderResult = await this.pdfController.renderPageToCanvas(pageIndex, this.previewMaxDimension);
+      if (this.cancelled) {
+        if (renderResult.imageSource && "close" in renderResult.imageSource) {
+          renderResult.imageSource.close();
+        }
+        return;
+      }
+
+      const previewTexture = new THREE.Texture(renderResult.imageSource);
+      previewTexture.needsUpdate = true;
+      previewTexture.minFilter = THREE.LinearFilter;
+      previewTexture.magFilter = THREE.LinearFilter;
+      previewTexture.colorSpace = THREE.SRGBColorSpace;
+      previewTexture.generateMipmaps = false;
+
+      entry.previewTexture = previewTexture;
+      entry.previewState = "ready";
+
+      if (entry.state !== "ready") {
+        this.sceneManager.setTexture(pageIndex, previewTexture, { disposePrevious: true });
+      }
+    } catch (error) {
+      entry.previewState = "error";
+      this.onError?.(error);
+    } finally {
+      this.activePreviewLoads = Math.max(0, this.activePreviewLoads - 1);
+      this.pumpPreviewQueue();
+    }
+  }
+
   async loadPageTexture(pageIndex) {
     const entry = this.entries.get(pageIndex);
     if (!entry) {
@@ -117,7 +186,9 @@ export class TextureStreamManager {
       entry.lastUsedTs = Date.now();
 
       this.memoryManager.add(entry.bytesEstimate);
-      this.sceneManager.setTexture(pageIndex, texture);
+      this.sceneManager.setTexture(pageIndex, texture, {
+        disposePrevious: !entry.previewTexture
+      });
 
       if (renderResult.downscaled) {
         this.onDownscale?.();
@@ -159,15 +230,22 @@ export class TextureStreamManager {
       if (!this.memoryManager.shouldEvict()) {
         break;
       }
+
       const entry = item.entry;
-      this.sceneManager.clearTexture(entry.pageIndex);
       this.memoryManager.remove(entry.bytesEstimate);
+
       entry.texture = null;
       entry.state = "evicted";
       entry.bytesEstimate = 0;
       entry.pixelHeight = 0;
       entry.pixelWidth = 0;
       entry.lastUsedTs = Date.now();
+
+      if (entry.previewTexture) {
+        this.sceneManager.setTexture(entry.pageIndex, entry.previewTexture, { disposePrevious: true });
+      } else {
+        this.sceneManager.clearTexture(entry.pageIndex);
+      }
     }
   }
 
@@ -178,12 +256,17 @@ export class TextureStreamManager {
   dispose() {
     this.cancelled = true;
     this.loadQueue.length = 0;
+    this.previewQueue.length = 0;
 
     for (const entry of this.entries.values()) {
-      if (entry.texture || entry.state === "ready") {
+      if (entry.texture && entry.previewTexture) {
+        entry.previewTexture.dispose();
+      }
+      if (entry.texture || entry.previewTexture || entry.state === "ready") {
         this.sceneManager.clearTexture(entry.pageIndex);
       }
       entry.texture = null;
+      entry.previewTexture = null;
     }
   }
 }

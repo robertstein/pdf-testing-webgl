@@ -75,13 +75,14 @@ export class SceneManager {
     this.pageMeshes.clear();
   }
 
-  setTexture(pageIndex, texture) {
+  setTexture(pageIndex, texture, options = {}) {
+    const { disposePrevious = true } = options;
     const mesh = this.pageMeshes.get(pageIndex);
     if (!mesh) {
       return;
     }
 
-    if (mesh.material.map) {
+    if (disposePrevious && mesh.material.map) {
       mesh.material.map.dispose();
     }
 
@@ -121,6 +122,45 @@ export class SceneManager {
       maxY: cameraState.y + halfHeight,
       centerX: cameraState.x,
       centerY: cameraState.y
+    };
+  }
+
+  getWorldViewport(cameraState) {
+    return {
+      worldWidth: (this.baseHalfWidth * 2) / cameraState.zoom,
+      worldHeight: (this.baseHalfHeight * 2) / cameraState.zoom
+    };
+  }
+
+  screenDeltaToWorld(deltaX, deltaY, cameraState) {
+    const rect = this.canvas.getBoundingClientRect();
+    const width = Math.max(1, rect.width);
+    const height = Math.max(1, rect.height);
+    const viewport = this.getWorldViewport(cameraState);
+    return {
+      worldDeltaX: (deltaX / width) * viewport.worldWidth,
+      worldDeltaY: (deltaY / height) * viewport.worldHeight
+    };
+  }
+
+  panCameraByScreenDelta(cameraState, deltaX, deltaY) {
+    const { worldDeltaX, worldDeltaY } = this.screenDeltaToWorld(deltaX, deltaY, cameraState);
+    cameraState.x += worldDeltaX;
+    cameraState.y -= worldDeltaY;
+  }
+
+  screenToWorld(clientX, clientY, cameraState) {
+    const rect = this.canvas.getBoundingClientRect();
+    const width = Math.max(1, rect.width);
+    const height = Math.max(1, rect.height);
+    const normalizedX = ((clientX - rect.left) / width) * 2 - 1;
+    const normalizedY = -(((clientY - rect.top) / height) * 2 - 1);
+    const halfWidth = this.baseHalfWidth / cameraState.zoom;
+    const halfHeight = this.baseHalfHeight / cameraState.zoom;
+
+    return {
+      x: cameraState.x + normalizedX * halfWidth,
+      y: cameraState.y + normalizedY * halfHeight
     };
   }
 
