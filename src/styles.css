@@ -1,0 +1,101 @@
+:root {
+  color-scheme: dark;
+  font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: radial-gradient(circle at 20% 0%, #1e293b 0%, #0f172a 55%, #020617 100%);
+  color: #e2e8f0;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) 1fr;
+  width: 100%;
+  height: 100%;
+}
+
+.panel {
+  padding: 18px;
+  background: rgba(15, 23, 42, 0.92);
+  border-right: 1px solid rgba(148, 163, 184, 0.2);
+  overflow-y: auto;
+}
+
+.panel h1 {
+  margin: 0 0 14px;
+  font-size: 1.25rem;
+}
+
+.upload {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.upload input {
+  width: 100%;
+}
+
+.status,
+.error,
+.notice,
+.stats p,
+.help p {
+  margin: 6px 0;
+  font-size: 0.92rem;
+}
+
+.error {
+  color: #fca5a5;
+}
+
+.notice {
+  color: #fcd34d;
+}
+
+.help {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.help p:first-child {
+  font-weight: 700;
+}
+
+.canvas-wrap {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+}
+
+.viewer-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+@media (max-width: 860px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+
+  .panel {
+    border-right: 0;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  }
+}
