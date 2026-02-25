@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { computeGridLayout } from "./layout/gridLayout";
 import { SceneManager } from "./gl/sceneManager";
+import { DecorationLayer } from "./gl/decorationLayer";
+import { WhitespaceMaskCache } from "./pdf/whitespaceMaskCache";
 import { TextureStreamManager } from "./gl/textureStreamManager";
 import { computeDefaultMemoryPolicy } from "./gl/memoryManager";
 import { GestureController } from "./input/gestureController";
@@ -21,7 +23,9 @@ export default function App() {
   const canvasRef = useRef(null);
   const sceneRef = useRef(null);
   const pdfControllerRef = useRef(null);
+  const whitespaceMaskCacheRef = useRef(null);
   const gestureRef = useRef(null);
+  const decorationLayerRef = useRef(null);
   const textureStreamRef = useRef(null);
 
   const [status, setStatus] = useState("Upload a PDF to start.");
@@ -29,12 +33,14 @@ export default function App() {
   const [pageCount, setPageCount] = useState(0);
   const [memoryUsage, setMemoryUsage] = useState({ bytes: 0, count: 0, maxBytes: 0, maxCount: 0 });
   const [downscaleNotice, setDownscaleNotice] = useState(false);
+  const [drawNotice, setDrawNotice] = useState("");
 
   const cameraStateRef = useRef({ ...INITIAL_CAMERA });
   const pagesRef = useRef([]);
   const rafRef = useRef(0);
   const lastFrameTimeRef = useRef(0);
   const renderRequestedRef = useRef(false);
+  const drawNoticeTimeoutRef = useRef(0);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -51,13 +57,23 @@ export default function App() {
     }
 
     sceneRef.current = sceneManager;
-    pdfControllerRef.current = new PdfDocumentController();
+    const pdfController = new PdfDocumentController();
+    pdfControllerRef.current = pdfController;
+    const whitespaceMaskCache = new WhitespaceMaskCache(pdfController);
+    whitespaceMaskCacheRef.current = whitespaceMaskCache;
+    const decorationLayer = new DecorationLayer(sceneManager, { whitespaceMaskCache });
+    decorationLayerRef.current = decorationLayer;
+    sceneManager.setOnBeforeClearPages(() => {
+      decorationLayer.clearAll();
+    });
 
     const gestureController = new GestureController({
       canvas,
       sceneManager,
       cameraState: cameraStateRef.current,
-      onChange: requestRenderLoop
+      onChange: requestRenderLoop,
+      onDrawGesture: handleDrawGesture,
+      onUndoLastDecoration: () => decorationLayer.removeLast()
     });
     gestureController.attach();
     gestureRef.current = gestureController;
@@ -75,9 +91,12 @@ export default function App() {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = 0;
       lastFrameTimeRef.current = 0;
+      clearTimeout(drawNoticeTimeoutRef.current);
       textureStreamRef.current?.dispose();
+      decorationLayer.dispose();
+      whitespaceMaskCache.clear();
       gestureController.detach();
-      pdfControllerRef.current?.dispose();
+      pdfController.dispose();
       sceneManager.dispose();
     };
   }, []);
@@ -150,6 +169,8 @@ export default function App() {
       setStatus("Loading PDF...");
       setMemoryUsage({ bytes: 0, count: 0, maxBytes: 0, maxCount: 0 });
       textureStreamRef.current?.dispose();
+      whitespaceMaskCacheRef.current?.clear();
+      decorationLayerRef.current?.clearAll();
       sceneManager.clearPages();
 
       await pdfController.loadFromFile(file);
@@ -185,6 +206,46 @@ export default function App() {
     }
   }
 
+  async function handleDrawGesture({ startClient, endClient }) {
+    const sceneManager = sceneRef.current;
+    const decorationLayer = decorationLayerRef.current;
+    const cameraState = cameraStateRef.current;
+    if (!sceneManager || !decorationLayer) {
+      return;
+    }
+
+    const startHit = sceneManager.pickPageAtClient(startClient.x, startClient.y, cameraState);
+    if (!startHit) {
+      return;
+    }
+
+    const endWorld = sceneManager.screenToWorld(endClient.x, endClient.y, cameraState);
+    const clampedEnd = sceneManager.clampWorldPointToPage(startHit.pageIndex, endWorld);
+    const result = await decorationLayer.addFromDrag({
+      pageIndex: startHit.pageIndex,
+      startWorld: startHit.worldPoint,
+      endWorld: clampedEnd
+    });
+    if (result?.status === "created") {
+      requestRenderLoop();
+      return;
+    }
+
+    if (result?.status === "no_route") {
+      showDrawNotice("No whitespace route available in this area.");
+    } else if (result?.status === "too_short") {
+      showDrawNotice("Drag farther within whitespace to create an illustration.");
+    }
+  }
+
+  function showDrawNotice(message) {
+    clearTimeout(drawNoticeTimeoutRef.current);
+    setDrawNotice(message);
+    drawNoticeTimeoutRef.current = window.setTimeout(() => {
+      setDrawNotice("");
+    }, 1600);
+  }
+
   return (
     <div className="app-shell">
       <aside className="panel">
@@ -200,6 +261,7 @@ export default function App() {
         {downscaleNotice ? (
           <p className="notice">Some pages were downscaled to preserve performance and memory.</p>
         ) : null}
+        {drawNotice ? <p className="notice">{drawNotice}</p> : null}
 
         <div className="stats">
           <p>Pages: {pageCount}</p>
@@ -217,8 +279,10 @@ export default function App() {
           <p>Controls</p>
           <p>Trackpad pinch or Ctrl+wheel: zoom</p>
           <p>Two-finger drag/scroll: pan</p>
-          <p>Click and drag: pan</p>
+          <p>Left drag on page: draw vines</p>
+          <p>Right drag: pan</p>
           <p>Double-click: reset camera</p>
+          <p>Backspace: undo last decoration</p>
         </div>
       </aside>
 

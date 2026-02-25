@@ -9,6 +9,8 @@ export class SceneManager {
     this.scene = null;
     this.camera = null;
     this.pageMeshes = new Map();
+    this.pageLayoutByIndex = new Map();
+    this.onBeforeClearPages = null;
 
     this.baseHalfHeight = 2.2;
     this.baseHalfWidth = 2.2;
@@ -53,6 +55,7 @@ export class SceneManager {
 
   setPages(pages) {
     this.clearPages();
+    this.pageLayoutByIndex.clear();
     for (const page of pages) {
       const geometry = new THREE.PlaneGeometry(page.worldWidth, page.worldHeight);
       const material = new THREE.MeshBasicMaterial({ color: PLACEHOLDER_COLOR });
@@ -60,10 +63,14 @@ export class SceneManager {
       mesh.position.set(page.worldX, page.worldY, 0);
       this.scene.add(mesh);
       this.pageMeshes.set(page.pageIndex, mesh);
+      this.pageLayoutByIndex.set(page.pageIndex, page);
     }
   }
 
   clearPages() {
+    if (this.onBeforeClearPages) {
+      this.onBeforeClearPages();
+    }
     for (const mesh of this.pageMeshes.values()) {
       this.scene.remove(mesh);
       mesh.geometry.dispose();
@@ -73,6 +80,7 @@ export class SceneManager {
       mesh.material.dispose();
     }
     this.pageMeshes.clear();
+    this.pageLayoutByIndex.clear();
   }
 
   setTexture(pageIndex, texture, options = {}) {
@@ -164,6 +172,54 @@ export class SceneManager {
     };
   }
 
+  pickPageAtClient(clientX, clientY, cameraState) {
+    const worldPoint = this.screenToWorld(clientX, clientY, cameraState);
+    for (const page of this.pageLayoutByIndex.values()) {
+      const minX = page.worldX - page.worldWidth / 2;
+      const maxX = page.worldX + page.worldWidth / 2;
+      const minY = page.worldY - page.worldHeight / 2;
+      const maxY = page.worldY + page.worldHeight / 2;
+      if (worldPoint.x >= minX && worldPoint.x <= maxX && worldPoint.y >= minY && worldPoint.y <= maxY) {
+        return { pageIndex: page.pageIndex, worldPoint };
+      }
+    }
+    return null;
+  }
+
+  clampWorldPointToPage(pageIndex, worldPoint) {
+    const page = this.pageLayoutByIndex.get(pageIndex);
+    if (!page) {
+      return { ...worldPoint };
+    }
+    return {
+      x: clamp(worldPoint.x, page.worldX - page.worldWidth / 2, page.worldX + page.worldWidth / 2),
+      y: clamp(worldPoint.y, page.worldY - page.worldHeight / 2, page.worldY + page.worldHeight / 2)
+    };
+  }
+
+  getPageMesh(pageIndex) {
+    return this.pageMeshes.get(pageIndex) || null;
+  }
+
+  getPageLayout(pageIndex) {
+    return this.pageLayoutByIndex.get(pageIndex) || null;
+  }
+
+  worldToPageLocal(pageIndex, worldPoint) {
+    const mesh = this.pageMeshes.get(pageIndex);
+    if (!mesh) {
+      return { ...worldPoint };
+    }
+    return {
+      x: worldPoint.x - mesh.position.x,
+      y: worldPoint.y - mesh.position.y
+    };
+  }
+
+  setOnBeforeClearPages(callback) {
+    this.onBeforeClearPages = callback || null;
+  }
+
   getVisiblePageIndices(layoutPages, cameraState) {
     const bounds = this.getWorldBounds(cameraState);
     const visible = new Set();
@@ -193,4 +249,8 @@ export class SceneManager {
       this.renderer.dispose();
     }
   }
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
